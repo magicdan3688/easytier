@@ -111,7 +111,6 @@ get_arch() {
 ask_version() {
     if [ "$ENV_TYPE" = "docker" ]; then
         echo -e "\n${BOLD}${CYAN}=== Docker 镜像版本设置 ===${RESET}"
-        echo -e "${YELLOW}👉 [说明] Docker 环境推荐直接使用 latest 标签，以便随时获取最新稳定版。${RESET}"
         printf "请输入镜像版本号 (回车默认使用 ${CYAN}latest${RESET}，如需指定请输入例如 v2.6.4): "
         read -r input_ver
         TARGET_VERSION="${input_ver:-latest}"
@@ -122,11 +121,9 @@ ask_version() {
     [ "$ENV_TYPE" = "macos" ] && info "正在从 GitHub 获取 Mac 版最新信息..." || info "正在从 GitHub 获取最新版本信息..."
     command -v curl >/dev/null 2>&1 || { apt-get update && apt-get install -y curl 2>/dev/null || yum install -y curl 2>/dev/null || true; }
 
-    # 优先使用 GitHub API 获取最新版本
     local fetched_ver=""
     fetched_ver=$(curl -s "https://api.github.com/repos/EasyTier/EasyTier/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
 
-    # API 失败时的 fallback 方案 (重定向解析)
     if [ -z "$fetched_ver" ]; then
         warn "API 请求失败，尝试通过跳转解析获取..."
         for base in "${RELEASE_BASES[@]}"; do
@@ -157,13 +154,13 @@ download_binary() {
     local arch=$(get_arch)
     local os_str="linux"
     [ "$ENV_TYPE" = "macos" ] && os_str="macos"
-    local file="easytier-${os_str}-${arch}-${version}.zip"
+    local file_name="easytier-${os_str}-${arch}-${version}.zip"
 
     command -v unzip >/dev/null 2>&1 || { apt-get update && apt-get install -y unzip 2>/dev/null || yum install -y unzip 2>/dev/null || true; }
 
     local download_success=0
     for base in "${RELEASE_BASES[@]}"; do
-        local url="${base}/download/${version}/${file}"
+        local url="${base}/download/${version}/${file_name}"
         local mirror_name="GitHub"
         [[ "$base" == *"kkgithub"* ]] && mirror_name="KKGitHub"
         [[ "$base" == *"ghproxy"* ]] && mirror_name="GHProxy"
@@ -197,7 +194,6 @@ download_binary() {
     cp "$cli_bin"  /usr/local/bin/easytier-cli
     chmod +x /usr/local/bin/easytier-core /usr/local/bin/easytier-cli
     
-    # 修复 macOS 签名问题
     if [ "$ENV_TYPE" = "macos" ]; then
         info "正在对二进制文件进行 macOS 签名修复..."
         codesign --remove-signature /usr/local/bin/easytier-core 2>/dev/null || true
@@ -207,9 +203,9 @@ download_binary() {
         codesign --force --deep --sign - /usr/local/bin/easytier-cli
     fi
 
-    # 二进制完整性校验
-    if ! /usr/local/bin/easytier-core --help >/dev/null 2>&1; then
-        error "核心程序校验失败，下载的文件可能已损坏或架构不匹配！"
+    # 二进制真实性校验 (防止下载到 HTML 403 页面)
+    if ! file /usr/local/bin/easytier-core | grep -qE "Mach-O|ELF"; then
+        error "核心程序校验失败，下载的文件不是有效的可执行文件（可能抓取到了错误页面）！"
         rm -rf /tmp/easytier.zip /tmp/easytier_out
         return 1
     fi
@@ -241,23 +237,18 @@ do_configure() {
     fi
 
     echo -e "\n${CYAN}------------------------------------------------${RESET}"
-    echo -e "${YELLOW}👉 [说明] 设备名称用于在控制台里辨认机器，中英文均可。${RESET}"
-    echo -e "${YELLOW}👉 [示例] Mac_Mini / Home_NAS / Office_PC${RESET}"
     local default_host="${cur_hostname:-$(hostname -s 2>/dev/null || echo 'easytier-node')}"
     printf "请输入设备名称 (默认: ${CYAN}%s${RESET}，回车保持): " "$default_host"
     read -r HOSTNAME
     HOSTNAME="${HOSTNAME:-$default_host}"
 
     echo -e "\n${CYAN}------------------------------------------------${RESET}"
-    echo -e "${YELLOW}👉 [说明] 网络名称是私有局域网的唯一标识，所有需要互相访问的设备必须填同一个名字。${RESET}"
-    echo -e "${YELLOW}👉 [示例] easytier_1 / family_vpn / my_secret_net${RESET}"
     printf "请输入你要创建或加入的【网络名称】 (当前: ${CYAN}%s${RESET}): " "${cur_net_name:-}"
     read -r NET_NAME
     NET_NAME="${NET_NAME:-$cur_net_name}"
     while [ -z "$NET_NAME" ]; do warn "网络名称不能为空: "; read -r NET_NAME; done
 
     echo -e "\n${CYAN}------------------------------------------------${RESET}"
-    echo -e "${YELLOW}👉 [说明] 网络密码用于加密节点间的数据。同名网络的设备密码必须一致。${RESET}"
     echo -e "${YELLOW}👉 [示例] 12345678 (建议数字+字母的强密码)${RESET}"
     printf "请输入【网络密码】 (已设置则直接回车保持): "
     read -r NET_SECRET
@@ -265,8 +256,6 @@ do_configure() {
     while [ -z "$NET_SECRET" ]; do warn "网络密码不能为空: "; read -r NET_SECRET; done
 
     echo -e "\n${CYAN}------------------------------------------------${RESET}"
-    echo -e "${YELLOW}👉 [说明] 虚拟 IP 是此设备在 VPN 里的“身份证IP”，必须和真实的物理局域网网段错开。${RESET}"
-    echo -e "${YELLOW}👉 [建议] 如果你不打算记它，直接敲回车，系统会随机分配一个 10.x.x.x 的地址。${RESET}"
     printf "请输入此设备的【虚拟 IP】 (当前: ${CYAN}%s${RESET}，回车自动分配，输'clear'清除): " "${cur_ipv4:-未设置}"
     read -r IPV4
     if   [ -z "$IPV4" ];        then IPV4="$cur_ipv4"
@@ -274,7 +263,6 @@ do_configure() {
     fi
 
     echo -e "\n${CYAN}------------------------------------------------${RESET}"
-    echo -e "${YELLOW}👉 [说明] 开启出口节点后，别的设备可以通过这台机器“全局代理”上网。${RESET}"
     printf "是否开启【出口节点】功能？[y/N] (当前: ${CYAN}%s${RESET}): " "$cur_exit_node"
     read -r EXIT_CHOICE
     EXIT_CHOICE="${EXIT_CHOICE:-$cur_exit_node}"
@@ -287,17 +275,12 @@ do_configure() {
             info "已开启 Linux IP 转发。"
         elif [ "$ENV_TYPE" = "macos" ]; then
             sysctl -w net.inet.ip.forwarding=1 >/dev/null 2>&1
-            # 持久化 macOS IP 转发
-            grep -q "net.inet.ip.forwarding=1" /etc/sysctl.conf 2>/dev/null || echo "net.inet.ip.forwarding=1" >> /etc/sysctl.conf
-            info "已开启 macOS IP 转发并写入 /etc/sysctl.conf 持久化。"
+            warn "macOS 重启后可能需要重新开启 IP 转发 (macOS 14+ 的 /etc/sysctl.conf 已被废弃，无法永久生效)。"
         fi
     fi
 
-    # >>> 子网映射功能配置区 <<<
     echo -e "\n${CYAN}------------------------------------------------${RESET}"
     echo -e "${BOLD}${YELLOW}=== 虚拟子网映射配置 (可选) ===${RESET}"
-    echo -e "${YELLOW}👉 [示例] 输入 192.168.11.0/24，即代表将本地 10.x 网段伪装成 11.x 供外部访问。${RESET}"
-    
     local PROXY_NET_ARG=""
     local SYS_FWD_ARG=""
     if [ -n "$cur_proxy_nets" ]; then
@@ -327,7 +310,6 @@ do_configure() {
     fi
 
     echo -e "\n${CYAN}------------------------------------------------${RESET}"
-    echo -e "${YELLOW}👉 [说明] 选择设备的工作模式：${RESET}"
     echo -e " 1) 纯客户端 (不占用端口，仅向外连接)"
     echo -e " 2) 纯中心节点 (开启 11010 端口侦听，等待别人连入)"
     echo -e " 3) 双核节点 (既开启侦听，又主动连接其他节点)"
@@ -386,10 +368,16 @@ EOF
 
     if [ "$ENV_TYPE" = "linux" ] || [ "$ENV_TYPE" = "macos" ]; then
         local start_sh="${CONF_DIR}/start.sh"
-        # 写入启动脚本，收敛参数，防止暴露在系统服务配置文件中
+        
         cat <<EOF > "$start_sh"
 #!/bin/bash
-/usr/local/bin/easytier-core \\
+# =========================================================================
+# 安全警告：直接在此脚本中传递 --network-secret 会导致密码在 \`ps aux\` 中可见。
+# 若需彻底隐藏，建议通过 EasyTier Web 助手生成 config.toml，然后使用以下命令替换：
+# exec /usr/local/bin/easytier-core -c ${CONF_DIR}/config.toml
+# =========================================================================
+
+exec /usr/local/bin/easytier-core \\
   --hostname "${HOSTNAME}" \\
   --network-name "${NET_NAME}" \\
   --network-secret "${NET_SECRET}" \\
@@ -455,7 +443,6 @@ EOF
 </dict>
 </plist>
 EOF
-        # 兼容处理 Launchctl 命令
         launchctl bootout system /Library/LaunchDaemons/com.easytier.node.plist 2>/dev/null || launchctl unload /Library/LaunchDaemons/com.easytier.node.plist 2>/dev/null || true
         launchctl bootstrap system /Library/LaunchDaemons/com.easytier.node.plist 2>/dev/null || launchctl load /Library/LaunchDaemons/com.easytier.node.plist
         sleep 4
@@ -477,12 +464,14 @@ services:
     image: easytier/easytier:${docker_img_tag}
     container_name: easytier
     restart: unless-stopped
-    network_mode: host
-    privileged: true
     cap_add:
       - NET_ADMIN
+      - NET_RAW
     devices:
       - /dev/net/tun:/dev/net/tun
+    ports:
+      - "11010:11010/tcp"
+      - "11010:11010/udp"
     volumes:
       - ${CONF_DIR}/data:/root
     command: >
@@ -515,8 +504,10 @@ show_status() {
             if /usr/local/bin/easytier-cli peer >/dev/null 2>&1; then
                 /usr/local/bin/easytier-cli peer
             else
-                warn "RPC接口未开启或连接失败，改为显示进程状态："
-                ps aux | grep easytier-core | grep -v grep
+                echo -e "${YELLOW}RPC 接口未开启或连接失败，显示当前进程状态：${RESET}"
+                ps -ef | grep easytier-[c]ore || true
+                echo -e "\n${CYAN}端口监听状态 (TCP 11010):${RESET}"
+                (lsof -iTCP:11010 -sTCP:LISTEN 2>/dev/null || netstat -tlnp 2>/dev/null | grep :11010 || echo "未检测到 11010 端口侦听")
             fi
         else
             echo -e "\n${RED}● 服务未运行${RESET}"
@@ -527,8 +518,10 @@ show_status() {
             if /usr/local/bin/easytier-cli peer >/dev/null 2>&1; then
                 /usr/local/bin/easytier-cli peer
             else
-                warn "RPC接口未开启或连接失败，改为显示进程状态："
-                ps aux | grep easytier-core | grep -v grep
+                echo -e "${YELLOW}RPC 接口未开启或连接失败，显示当前进程状态：${RESET}"
+                ps -ef | grep easytier-[c]ore || true
+                echo -e "\n${CYAN}端口监听状态 (TCP 11010):${RESET}"
+                (lsof -iTCP:11010 -sTCP:LISTEN 2>/dev/null || netstat -tlnp 2>/dev/null | grep :11010 || echo "未检测到 11010 端口侦听")
             fi
         else
             echo -e "\n${RED}● 服务未运行${RESET}"
@@ -539,8 +532,8 @@ show_status() {
             if docker exec easytier easytier-cli peer >/dev/null 2>&1; then
                 docker exec easytier easytier-cli peer
             else
-                warn "RPC接口未开启或连接失败，改为显示容器日志尾部："
-                docker logs --tail 10 easytier
+                echo -e "${YELLOW}RPC 接口未开启或连接失败，容器端口映射状态：${RESET}"
+                docker port easytier || echo "无映射端口"
             fi
         else
             echo -e "\n${RED}● 容器未运行${RESET}"
@@ -615,7 +608,8 @@ do_uninstall() {
             rm -f /usr/local/bin/easytier-core /usr/local/bin/easytier-cli
             rm -rf "$CONF_DIR"
             rm -f /usr/local/var/log/easytier.log /usr/local/var/log/easytier.err
-            success "macOS 相关文件已彻底清理。"
+            rm -f /Library/Logs/DiagnosticReports/easytier-core-*.ips
+            success "macOS 相关文件（含 Crash 日志）已彻底清理。"
 
         elif [ "$ENV_TYPE" = "docker" ]; then
             local dcmd=$(get_docker_compose_cmd)
@@ -634,8 +628,20 @@ do_uninstall() {
 # 主菜单
 # ================================================================
 while true; do
+    local current_version="未安装"
+    if [ "$ENV_TYPE" = "docker" ]; then
+        if docker ps -a | grep -q easytier; then
+            current_version=$(docker exec easytier easytier-cli --version 2>/dev/null | awk '{print $2}' || echo "未知")
+        fi
+    else
+        if [ -x "/usr/local/bin/easytier-cli" ]; then
+            current_version=$(/usr/local/bin/easytier-cli --version 2>/dev/null | awk '{print $2}' || echo "未知")
+        fi
+    fi
+
     echo -e "\n${BOLD}${BLUE}=====================================${RESET}"
     echo -e "${BOLD}${BLUE}   EasyTier 控制台 (${ENV_TYPE} 模式)    ${RESET}"
+    echo -e "${BOLD}${BLUE}   当前版本: ${current_version}          ${RESET}"
     echo -e "${BOLD}${BLUE}=====================================${RESET}"
     echo -e "  ${GREEN}1.${RESET} 全新安装与配置 (需下载核心)"
     echo -e "  ${GREEN}2.${RESET} 仅修改网络配置 (不下载，秒重启)"
