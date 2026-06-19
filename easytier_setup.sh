@@ -628,7 +628,7 @@ do_uninstall() {
 # 主菜单
 # ================================================================
 while true; do
-    local current_version="未安装"
+    current_version="未安装"
     if [ "$ENV_TYPE" = "docker" ]; then
         if docker ps -a | grep -q easytier; then
             current_version=$(docker exec easytier easytier-cli --version 2>/dev/null | awk '{print $2}' || echo "未知")
